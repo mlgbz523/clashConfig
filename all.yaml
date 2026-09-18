@@ -1,22 +1,76 @@
+# ============================================================
+# Mihomo/Clash Meta 优化配置
+# 基于实际节点命名修正 filter + 补充完整 DNS 配置
+# ============================================================
+
 mixed-port: 7890
 allow-lan: false
+bind-address: "*"
+ipv6: false
 mode: rule
 log-level: info
 external-controller: 127.0.0.1:9090
-ipv6: false
+
+# ==================== DNS 配置（优化版） ====================
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:53
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "*.arpa"
+    - time.*.com
+    - ntp.*.com
+    - +.market.xiaomi.com
+    - localhost.ptlogin2.qq.com
+    - "*.msftncsi.com"
+    - www.msftconnecttest.com
+  default-nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+  nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+  nameserver-policy:
+    "98k2887114514.28870721.xyz": https://dns.alidns.com/dns-query
+    "cloudflare-ech.com": https://dns.alidns.com/dns-query
+    geosite:cn:
+      - 119.29.29.29
+      - 223.5.5.5
+    geosite:geolocation-!cn:
+      - tls://1.0.0.1:853
+      - tls://dns.google:853
+  proxy-server-nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+  fallback:
+    - 8.8.8.8
+    - 1.1.1.1
+    - tls://1.0.0.1:853
+    - tls://dns.google:853
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    geosite:
+      - gfw
+    ipcidr:
+      - 240.0.0.0/4
 
 # ==================== 订阅来源 ====================
 proxy-providers:
   cf-all:
     type: http
-    url: ""
-    interval: 86400                      # 每 24 小时拉取一次订阅
-    path: ./providers/cf-all.yaml        # 缓存到本地，启动更快
-    health-check:                        # ★ 第一层：存活检测
+    url: "https://SUBAPI.cmliussss.net/sub?target=clash&url=你的原始订阅链接"
+    interval: 86400
+    path: ./providers/cf-all.yaml
+    health-check:
       enable: true
       url: http://cp.cloudflare.com/generate_204
-      interval: 180                      # 每 3 分钟探测一次存活
-      lazy: true                         # 无流量时不测，省电省流
+      interval: 180
+      lazy: true
 
 # ==================== 策略组 ====================
 proxy-groups:
@@ -32,71 +86,73 @@ proxy-groups:
       - 🇸🇬 新加坡-CF
       - 🌐 手动切换
 
-  # ② ★ 自动测速核心组：延迟最低者排第一，超阈值自动换
+  # ② 自动测速核心组：延迟最低排第一
   - name: ⚡ 自动优选
     type: url-test
     use: [cf-all]
-    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US[^A]|DE(?!fault)|SG|Frankfurt|Berlin|Munich|Dallas|Los Angeles|San Jose|Chicago|Singapore)"
+    filter: "(?i)(CF|🇩🇪|🇸🇬|DE|SG|SIN|法兰克福|新加坡)"
     url: http://cp.cloudflare.com/generate_204
-    interval: 300                        # 每 5 分钟全体测一次延迟
-    tolerance: 50                        # 延迟差 <50ms 不切换，防抖动
+    interval: 300
+    tolerance: 50
     lazy: true
     hidden: false
 
-  # ③ 流量分散到多个节点（下载/多开场景）
+  # ③ 流量分散（下载/多开场景）
   - name: ♻️ 负载均衡
     type: load-balance
     strategy: consistent-hashing
     use: [cf-all]
-    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US|DE|SG)"
+    filter: "(?i)(CF|🇩🇪|🇸🇬|DE|SG|SIN|法兰克福|新加坡)"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
     lazy: true
 
-  # ④ 主节点挂了自动切下一个（稳定性优先）
+  # ④ 主节点挂了自动切下一个
   - name: 🔯 故障转移
     type: fallback
     use: [cf-all]
-    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US|DE|SG)"
+    filter: "(?i)(CF|🇩🇪|🇸🇬|DE|SG|SIN|法兰克福|新加坡)"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
     lazy: true
 
-  # ⑤ 按国家分组（各自独立测速）
+  # ⑤ 美国-CF（独立测速）
   - name: 🇺🇸 美国-CF
     type: url-test
     use: [cf-all]
-    filter: "(?i)(🇺🇸|美国|US[^A]|Los Angeles|San Jose|Chicago|Dallas|New York)"
+    filter: "(?i)(CF)"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
     lazy: true
 
+  # ⑥ 德国-CF（独立测速）
   - name: 🇩🇪 德国-CF
     type: url-test
     use: [cf-all]
-    filter: "(?i)(🇩🇪|德国|DE(?!fault)|Frankfurt|Berlin|Munich|Düsseldorf)"
+    filter: "(?i)(🇩🇪|DE|法兰克福)"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
     lazy: true
 
+  # ⑦ 新加坡-CF（独立测速）
   - name: 🇸🇬 新加坡-CF
     type: url-test
     use: [cf-all]
-    filter: "(?i)(🇸🇬|新加坡|SG|Singapore|SIN)"
+    filter: "(?i)(🇸🇬|SG|SIN|新加坡)"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
     lazy: true
 
-  # ⑥ 全部节点平铺，想手动点名时用
+  # ⑧ 全部节点平铺，手动点名用
   - name: 🌐 手动切换
     type: select
     use: [cf-all]
-    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US|DE|SG)"
+    filter: "(?i)(CF|🇩🇪|🇸🇬|DE|SG|SIN|法兰克福|新加坡)"
 
-  # ⑦ 漏网之鱼
+  # ⑨ 漏网之鱼
   - name: 🐟 漏网之鱼
     type: select
     proxies:
