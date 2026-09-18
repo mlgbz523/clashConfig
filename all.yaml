@@ -1,0 +1,229 @@
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9090
+ipv6: false
+
+# ==================== 订阅来源 ====================
+proxy-providers:
+  cf-all:
+    type: http
+    url: ""
+    interval: 86400                      # 每 24 小时拉取一次订阅
+    path: ./providers/cf-all.yaml        # 缓存到本地，启动更快
+    health-check:                        # ★ 第一层：存活检测
+      enable: true
+      url: http://cp.cloudflare.com/generate_204
+      interval: 180                      # 每 3 分钟探测一次存活
+      lazy: true                         # 无流量时不测，省电省流
+
+# ==================== 策略组 ====================
+proxy-groups:
+  # ① 主开关：手动选走哪个策略
+  - name: 🚀 节点选择
+    type: select
+    proxies:
+      - ⚡ 自动优选
+      - ♻️ 负载均衡
+      - 🔯 故障转移
+      - 🇺🇸 美国-CF
+      - 🇩🇪 德国-CF
+      - 🇸🇬 新加坡-CF
+      - 🌐 手动切换
+
+  # ② ★ 自动测速核心组：延迟最低者排第一，超阈值自动换
+  - name: ⚡ 自动优选
+    type: url-test
+    use: [cf-all]
+    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US[^A]|DE(?!fault)|SG|Frankfurt|Berlin|Munich|Dallas|Los Angeles|San Jose|Chicago|Singapore)"
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300                        # 每 5 分钟全体测一次延迟
+    tolerance: 50                        # 延迟差 <50ms 不切换，防抖动
+    lazy: true
+    hidden: false
+
+  # ③ 流量分散到多个节点（下载/多开场景）
+  - name: ♻️ 负载均衡
+    type: load-balance
+    strategy: consistent-hashing
+    use: [cf-all]
+    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US|DE|SG)"
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
+
+  # ④ 主节点挂了自动切下一个（稳定性优先）
+  - name: 🔯 故障转移
+    type: fallback
+    use: [cf-all]
+    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US|DE|SG)"
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
+
+  # ⑤ 按国家分组（各自独立测速）
+  - name: 🇺🇸 美国-CF
+    type: url-test
+    use: [cf-all]
+    filter: "(?i)(🇺🇸|美国|US[^A]|Los Angeles|San Jose|Chicago|Dallas|New York)"
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇩🇪 德国-CF
+    type: url-test
+    use: [cf-all]
+    filter: "(?i)(🇩🇪|德国|DE(?!fault)|Frankfurt|Berlin|Munich|Düsseldorf)"
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇸🇬 新加坡-CF
+    type: url-test
+    use: [cf-all]
+    filter: "(?i)(🇸🇬|新加坡|SG|Singapore|SIN)"
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  # ⑥ 全部节点平铺，想手动点名时用
+  - name: 🌐 手动切换
+    type: select
+    use: [cf-all]
+    filter: "(?i)(🇺🇸|🇩🇪|🇸🇬|美国|德国|新加坡|US|DE|SG)"
+
+  # ⑦ 漏网之鱼
+  - name: 🐟 漏网之鱼
+    type: select
+    proxies:
+      - 🚀 节点选择
+      - DIRECT
+
+# ==================== 分流规则 ====================
+rules:
+  # —— 局域网直连 ——
+  - DOMAIN-SUFFIX,local,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+
+  # —— 完全版去广告（三层叠加）——
+  - RULE-SET,banad,REJECT
+  - RULE-SET,banprogramad,REJECT
+  - RULE-SET,baneasylischina,REJECT
+
+  # —— 谷歌中国直连 ——
+  - RULE-SET,googlecn,DIRECT
+
+  # —— 国内直连 ——
+  - RULE-SET,china_domain,DIRECT
+  - RULE-SET,china_company_ip,DIRECT
+  - RULE-SET,china_ip,DIRECT
+  - RULE-SET,download,DIRECT
+
+  # —— 系统服务直连 ——
+  - RULE-SET,apple,DIRECT
+  - RULE-SET,microsoft,DIRECT
+  - RULE-SET,onedrive,DIRECT
+
+  # —— GEOIP ——
+  - GEOIP,CN,DIRECT,no-resolve
+
+  # —— 兜底 ——
+  - MATCH,🐟 漏网之鱼
+
+# ==================== 规则集定义 ====================
+rule-providers:
+  banad:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list
+    path: ./ruleset/banad.list
+    interval: 86400
+
+  banprogramad:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanProgramAD.list
+    path: ./ruleset/banprogramad.list
+    interval: 86400
+
+  baneasylischina:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanEasyListChina.list
+    path: ./ruleset/baneasylischina.list
+    interval: 86400
+
+  googlecn:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/GoogleCN.list
+    path: ./ruleset/googlecn.list
+    interval: 86400
+
+  china_domain:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list
+    path: ./ruleset/china_domain.list
+    interval: 86400
+
+  china_company_ip:
+    type: http
+    behavior: ipcidr
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaCompanyIp.list
+    path: ./ruleset/china_company_ip.list
+    interval: 86400
+
+  china_ip:
+    type: http
+    behavior: ipcidr
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaIp.list
+    path: ./ruleset/china_ip.list
+    interval: 86400
+
+  download:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Download.list
+    path: ./ruleset/download.list
+    interval: 86400
+
+  apple:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Apple.list
+    path: ./ruleset/apple.list
+    interval: 86400
+
+  microsoft:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Microsoft.list
+    path: ./ruleset/microsoft.list
+    interval: 86400
+
+  onedrive:
+    type: http
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/OneDrive.list
+    path: ./ruleset/onedrive.list
+    interval: 86400
