@@ -34,9 +34,12 @@ dns:
   nameserver:
     - 119.29.29.29
     - 223.5.5.5
+  # nameserver-policy:
+  #   "98k2887114514.28870721.xyz": https://dns.alidns.com/dns-query
+  #   "cloudflare-ech.com": https://dns.alidns.com/dns-query
   nameserver-policy:
-    "98k2887114514.28870721.xyz": https://dns.alidns.com/dns-query
-    "cloudflare-ech.com": https://dns.alidns.com/dns-query
+    "98k2887114514.28870721.xyz": "223.5.5.5"
+    "cloudflare-ech.com": "223.5.5.5"
     geosite:cn:
       - 119.29.29.29
       - 223.5.5.5
@@ -74,11 +77,12 @@ proxy-providers:
 
 # ==================== 策略组 ====================
 proxy-groups:
-  # ① 主开关：手动选择总体走向
+  # ① 主开关
   - name: 🚀 节点选择
     type: select
     proxies:
       - ⚡ 自动优选
+      - 🤖 Gemini 专项
       - 🇺🇸 美国节点
       - 🇩🇪 德国节点
       - 🇸🇬 新加坡节点
@@ -87,7 +91,7 @@ proxy-groups:
       - 🔯 故障转移
       - 🌐 手动切换
 
-  # ② 自动测速（国家组 + CF 组）
+  # ② 自动测速组
   - name: ⚡ 自动优选
     type: url-test
     proxies:
@@ -100,37 +104,44 @@ proxy-groups:
     tolerance: 50
     lazy: true
 
-  # ③ 纯正美国组（排除含有 CF/Cloudflare 标记的节点，仅保留美洲城市/地区）
+  # ③ Gemini 专属组：采用 fallback 保证 IP 稳定，默认优先走新加坡/美国
+  - name: 🤖 Gemini 专项
+    type: fallback
+    proxies:
+      - 🇸🇬 新加坡节点
+      - 🇺🇸 美国节点
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
+
+  # ④ 纯正美国组（改用 fallback 保持 IP 稳定，排除 CF）
   - name: 🇺🇸 美国节点
-    type: url-test
+    type: fallback
     use: [provider-all]
     filter: "^(?=.*(?i)(🇺🇸|美国|US|USA|美西|美东|洛杉矶|旧金山|芝加哥|达拉斯|纽约|迈阿密|西雅图|休斯顿|圣何塞))(?!.*(?i)(CF|Cloudflare)).*$"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
-    tolerance: 50
     lazy: true
 
-  # ④ 纯正德国组（排除 CF）
+  # ⑤ 纯正德国组（改用 fallback，排除 CF）
   - name: 🇩🇪 德国节点
-    type: url-test
+    type: fallback
     use: [provider-all]
     filter: "^(?=.*(?i)(🇩🇪|德国|DE|法兰克福|Frankfurt|Berlin|Munich|München|Düsseldorf))(?!.*(?i)(CF|Cloudflare)).*$"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
-    tolerance: 50
     lazy: true
 
-  # ⑤ 纯正新加坡组（排除 CF）
+  # ⑥ 纯正新加坡组（改用 fallback 保持 IP 稳定，排除 CF）
   - name: 🇸🇬 新加坡节点
-    type: url-test
+    type: fallback
     use: [provider-all]
     filter: "^(?=.*(?i)(🇸🇬|新加坡|SG|SIN|Singapore))(?!.*(?i)(CF|Cloudflare)).*$"
     url: http://cp.cloudflare.com/generate_204
     interval: 300
-    tolerance: 50
     lazy: true
 
-  # ⑥ 独立 Cloudflare 组（仅识别 CF/Cloudflare 节点）
+  # ⑦ 独立 Cloudflare 组
   - name: ☁️ Cloudflare
     type: url-test
     use: [provider-all]
@@ -140,7 +151,7 @@ proxy-groups:
     tolerance: 50
     lazy: true
 
-  # ⑦ 负载均衡
+  # ⑧ 负载均衡
   - name: ♻️ 负载均衡
     type: load-balance
     strategy: consistent-hashing
@@ -153,7 +164,7 @@ proxy-groups:
     interval: 300
     lazy: true
 
-  # ⑧ 故障转移
+  # ⑨ 全局故障转移
   - name: 🔯 故障转移
     type: fallback
     proxies:
@@ -165,7 +176,7 @@ proxy-groups:
     interval: 300
     lazy: true
 
-  # ⑨ 手动切换（二级面板导航）
+  # ⑩ 手动切换
   - name: 🌐 手动切换
     type: select
     proxies:
@@ -174,7 +185,7 @@ proxy-groups:
       - 🇸🇬 新加坡节点
       - ☁️ Cloudflare
 
-  # ⑩ 漏网之鱼
+  # ⑪ 漏网之鱼
   - name: 🐟 漏网之鱼
     type: select
     proxies:
@@ -195,6 +206,9 @@ rules:
   - RULE-SET,banad,REJECT
   - RULE-SET,banprogramad,REJECT
   - RULE-SET,baneasylischina,REJECT
+
+  # —— Gemini 专项分流（必须置于 googlecn 之前） ——
+  - RULE-SET,gemini,🤖 Gemini 专项
 
   # —— 谷歌中国直连 ——
   - RULE-SET,googlecn,DIRECT
@@ -218,6 +232,15 @@ rules:
 
 # ==================== 规则集定义 ====================
 rule-providers:
+  # ACL4SSR 维护的 Gemini 官方分流规则
+  gemini:
+    type: http
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/Gemini.list
+    path: ./ruleset/gemini.list
+    interval: 86400
+
   banad:
     type: http
     behavior: domain
